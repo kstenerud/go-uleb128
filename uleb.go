@@ -1,3 +1,5 @@
+// Package uleb128 provides encoders and decoders for unsigned little endian
+// base128 values: https://en.wikipedia.org/wiki/LEB128
 package uleb128
 
 import (
@@ -5,9 +7,7 @@ import (
 	"math/big"
 )
 
-// https://en.wikipedia.org/wiki/LEB128
-
-// EncodedSize returns the number of bytes required to encode this value
+// EncodedSize returns the number of bytes required to encode this value.
 func EncodedSize(value *big.Int) int {
 	if isZero(value) {
 		return 1
@@ -15,7 +15,7 @@ func EncodedSize(value *big.Int) int {
 	words := value.Bits()
 	bits := (len(words) - 1) * wordSize()
 	groupCount := bits/7 + 1
-	bitOffset := 7 - bits%7
+	bitOffset := uint(7 - bits%7)
 	highWord := words[len(words)-1] >> bitOffset
 	for highWord != 0 {
 		groupCount++
@@ -24,25 +24,63 @@ func EncodedSize(value *big.Int) int {
 	return groupCount
 }
 
-func Encode(value *big.Int, buffer []byte) {
-	if is32Bit() {
-		encode32(value, buffer)
+// EncodedSizeUint64 returns the number of bytes required to encode this value.
+func EncodedSizeUint64(value uint64) int {
+	if value == 0 {
+		return 1
 	}
-	encode64(value, buffer)
+	groupCount := 0
+	for value != 0 {
+		groupCount++
+		value >>= 7
+	}
+	return groupCount
 }
 
-func Decode(buffer []byte) (large *big.Int, byteCount int, err error) {
+// Encode a math.big.Int value, returning the number of bytes encoded. The sign
+// of the value will be ignored.
+// Note: This will panic if the buffer isn't big enough.
+func Encode(value *big.Int, buffer []byte) (byteCount int) {
+	if is32Bit() {
+		return encode32(value, buffer)
+	}
+	return encode64(value, buffer)
+}
+
+// Encode a uint64 value, returning the number of bytes encoded.
+// Note: This will panic if the buffer isn't big enough.
+func EncodeUint64(value uint64, buffer []byte) (byteCount int) {
+	if value == 0 {
+		buffer[0] = 0
+		byteCount = 1
+		return
+	}
+
+	index := 0
+	for value != 0 {
+		buffer[index] = byte((value & payloadMask) | continuationMask)
+		value >>= 7
+		index++
+	}
+	buffer[index-1] &= payloadMask
+	byteCount = index
+	return
+}
+
+// Decode an encoded ULEB128 value. If the value is small enough to fit into
+// a uint64, asBigInt will be nil and asUint will contain the result.
+func Decode(buffer []byte) (asUint uint64, asBigInt *big.Int, byteCount int, err error) {
 	words := []big.Word{}
 	word := big.Word(0)
-	bitIndex := 0
+	bitIndex := uint(0)
 	for index := 0; index < len(buffer); index++ {
 		b := buffer[index]
 		word |= big.Word(b&payloadMask) << bitIndex
 
 		bitIndex += 7
-		if bitIndex >= wordSize() {
+		if int(bitIndex) >= wordSize() {
 			words = append(words, big.Word(word))
-			bitIndex &= int(wordMask())
+			bitIndex &= wordMask()
 			word = big.Word(b&payloadMask) >> (7 - bitIndex)
 		}
 
@@ -50,9 +88,22 @@ func Decode(buffer []byte) (large *big.Int, byteCount int, err error) {
 			if word != 0 {
 				words = append(words, big.Word(word))
 			}
-			large = big.NewInt(0)
-			large.SetBits(words)
 			byteCount = index + 1
+			if is32Bit() {
+				if len(words) == 1 {
+					asUint = uint64(words[0])
+					return
+				} else if len(words) == 2 {
+					asUint = (uint64(words[1]) << 32) | uint64(words[0])
+				}
+			} else {
+				if len(words) == 1 {
+					asUint = uint64(words[0])
+					return
+				}
+			}
+			asBigInt = big.NewInt(0)
+			asBigInt.SetBits(words)
 			return
 		}
 	}
@@ -62,14 +113,15 @@ func Decode(buffer []byte) (large *big.Int, byteCount int, err error) {
 	return
 }
 
-func encode32(value *big.Int, buffer []byte) {
+func encode32(value *big.Int, buffer []byte) (byteCount int) {
+	// Prevent compilation on 64-bit arch
 	if !is32Bit() {
 		return
 	}
 
 	if isZero(value) {
 		buffer[0] = 0
-		return
+		return 1
 	}
 
 	const lowMask = 0xffff
@@ -79,13 +131,13 @@ func encode32(value *big.Int, buffer []byte) {
 	bufferPos := 0
 	end := len(words) - 1
 	shiftIndex := 0
-	shift := 0
+	shift := uint(0)
 
 	for i := 0; i < end; i++ {
 		srcWord := words[i]
 
 		// Low 16 bits
-		shift = int(leftShifts32[shiftIndex])
+		shift = uint(leftShifts32[shiftIndex])
 		accum |= (srcWord & lowMask) << shift
 		groupCount := int(groupCounts32[shiftIndex])
 		for j := 0; j < groupCount; j++ {
@@ -97,7 +149,7 @@ func encode32(value *big.Int, buffer []byte) {
 		shiftIndex = (shiftIndex + 1) % 15
 
 		// High 16 bits
-		shift = int(rightShifts32[shiftIndex])
+		shift = uint(rightShifts32[shiftIndex])
 		accum |= (srcWord & highMask) >> shift
 		groupCount = int(groupCounts32[shiftIndex])
 		for j := 0; j < groupCount; j++ {
@@ -112,7 +164,7 @@ func encode32(value *big.Int, buffer []byte) {
 	srcWord := words[end]
 
 	// Low 16 bits
-	shift = int(leftShifts32[shiftIndex])
+	shift = uint(leftShifts32[shiftIndex])
 	srcWordHigh := srcWord & highMask
 	accum |= (srcWord & lowMask) << shift
 	groupCount := int(groupCounts32[shiftIndex])
@@ -121,7 +173,7 @@ func encode32(value *big.Int, buffer []byte) {
 		accum >>= 7
 		if accum == 0 && srcWordHigh == 0 {
 			buffer[bufferPos] &= payloadMask
-			return
+			return bufferPos + 1
 		}
 		bufferPos++
 	}
@@ -129,7 +181,7 @@ func encode32(value *big.Int, buffer []byte) {
 	shiftIndex = (shiftIndex + 1) % 15
 
 	// High 16 bits
-	shift = int(rightShifts32[shiftIndex])
+	shift = uint(rightShifts32[shiftIndex])
 	accum |= (srcWord & highMask) >> shift
 	groupCount = int(groupCounts32[shiftIndex])
 	for {
@@ -137,20 +189,22 @@ func encode32(value *big.Int, buffer []byte) {
 		accum >>= 7
 		if accum == 0 {
 			buffer[bufferPos] &= payloadMask
-			return
+			return bufferPos + 1
 		}
 		bufferPos++
 	}
+	return bufferPos
 }
 
-func encode64(value *big.Int, buffer []byte) {
+func encode64(value *big.Int, buffer []byte) (byteCount int) {
+	// Prevent compilation on 32-bit arch
 	if is32Bit() {
 		return
 	}
 
 	if isZero(value) {
 		buffer[0] = 0
-		return
+		return 1
 	}
 
 	const lowMask = 0xffffffff
@@ -159,8 +213,8 @@ func encode64(value *big.Int, buffer []byte) {
 	accum := big.Word(0)
 	bufferPos := 0
 	end := len(words) - 1
-	shiftIndex := 0
-	shift := 0
+	shiftIndex := uint(0)
+	shift := uint(0)
 
 	for i := 0; i < end; i++ {
 		srcWord := words[i]
@@ -178,7 +232,7 @@ func encode64(value *big.Int, buffer []byte) {
 		shiftIndex = (shiftIndex + 1) % 15
 
 		// High 32 bits
-		shift = int(rightShifts64[shiftIndex])
+		shift = uint(rightShifts64[shiftIndex])
 		accum |= (srcWord & highMask) >> shift
 		groupCount = int(groupCounts64[shiftIndex])
 		for j := 0; j < groupCount; j++ {
@@ -202,7 +256,7 @@ func encode64(value *big.Int, buffer []byte) {
 		accum >>= 7
 		if accum == 0 && srcWordHigh == 0 {
 			buffer[bufferPos] &= payloadMask
-			return
+			return bufferPos + 1
 		}
 		bufferPos++
 	}
@@ -210,7 +264,7 @@ func encode64(value *big.Int, buffer []byte) {
 	shiftIndex = (shiftIndex + 1) % 15
 
 	// High 32 bits
-	shift = int(rightShifts64[shiftIndex])
+	shift = uint(rightShifts64[shiftIndex])
 	accum |= srcWordHigh >> shift
 	groupCount = int(groupCounts64[shiftIndex])
 	for {
@@ -218,10 +272,11 @@ func encode64(value *big.Int, buffer []byte) {
 		accum >>= 7
 		if accum == 0 {
 			buffer[bufferPos] &= payloadMask
-			return
+			return bufferPos + 1
 		}
 		bufferPos++
 	}
+	return bufferPos
 }
 
 func is32Bit() bool {
@@ -246,7 +301,7 @@ func isZero(v *big.Int) bool {
 const payloadMask = 0x7f
 const continuationMask = 0x80
 
-// 64-bit
+// 64-bit words, split into upper and lower 32-bit groups
 // | Step | U/L | shift | groups | remain |
 // | ---- | --- | ----- | ------ | ------ |
 // |    0 |  L  |    0  |    4   |    4   |
@@ -266,7 +321,7 @@ const continuationMask = 0x80
 var groupCounts64 = []uint8{4, 5, 4, 5, 4, 5, 5, 4, 5, 4, 5, 4, 5, 5}
 var rightShifts64 = []uint8{0, 28, 0, 27, 0, 26, 0, 32, 0, 31, 0, 30, 0, 29}
 
-// 32-bit
+// 32-bit words, split into upper and lower 16-bit groups
 // | Step | U/L | shift | groups | remain |
 // | ---- | --- | ----- | ------ | ------ |
 // |    0 |  L  |    0  |    2   |    2   |

@@ -1,6 +1,7 @@
 package uleb128
 
 import (
+	"fmt"
 	"math/big"
 	"reflect"
 	"testing"
@@ -35,19 +36,55 @@ func assertEncodeDecode(t *testing.T, words []uint64, expectedBytes ...byte) {
 	expectedBigInt.SetBits(toBigWords(words))
 	expectedByteCount := EncodedSize(expectedBigInt)
 	actualBytes := make([]byte, expectedByteCount, expectedByteCount)
-	Encode(expectedBigInt, actualBytes)
+	actualFilledByteCount := Encode(expectedBigInt, actualBytes)
+	if actualFilledByteCount != expectedByteCount {
+		t.Errorf("Expected byte count of %v but got %v", expectedByteCount, actualFilledByteCount)
+	}
 	if !reflect.DeepEqual(actualBytes, expectedBytes) {
 		t.Errorf("Expected %v but got %v", describe.D(expectedBytes), describe.D(actualBytes))
 	}
-	actualBigInt, actualByteCount, err := Decode(actualBytes)
+	actualUint, actualBigInt, actualByteCount, err := Decode(actualBytes)
 	if err != nil {
 		t.Error(err)
 	}
 	if actualByteCount != expectedByteCount {
 		t.Errorf("Expected byte count of %v but got %v", expectedByteCount, actualByteCount)
 	}
-	if expectedBigInt.Cmp(actualBigInt) != 0 {
-		t.Errorf("Expected %x but got %x", expectedBigInt, actualBigInt)
+	if len(expectedBigInt.Bits()) == 1 {
+		if expectedBigInt.Uint64() != actualUint {
+			t.Errorf("Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
+		}
+	} else {
+		if expectedBigInt.Cmp(actualBigInt) != 0 {
+			t.Errorf("Expected %x but got %x", expectedBigInt, actualBigInt)
+		}
+	}
+
+	if len(words) > 1 {
+		return
+	}
+
+	expectedUint := words[0]
+	expectedByteCount = EncodedSizeUint64(expectedUint)
+	actualBytes = make([]byte, expectedByteCount, expectedByteCount)
+
+	actualFilledByteCount = EncodeUint64(expectedUint, actualBytes)
+	if actualFilledByteCount != expectedByteCount {
+		t.Errorf("Expected byte count of %v but got %v", expectedByteCount, actualFilledByteCount)
+	}
+
+	if !reflect.DeepEqual(actualBytes, expectedBytes) {
+		t.Errorf("Expected %v but got %v", describe.D(expectedBytes), describe.D(actualBytes))
+	}
+	actualUint, actualBigInt, actualByteCount, err = Decode(actualBytes)
+	if err != nil {
+		t.Error(err)
+	}
+	if actualByteCount != expectedByteCount {
+		t.Errorf("Expected byte count of %v but got %v", expectedByteCount, actualByteCount)
+	}
+	if expectedUint != actualUint {
+		t.Errorf("Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
 	}
 }
 
@@ -81,4 +118,38 @@ func TestEncodeDecode(t *testing.T) {
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 		0xff, 0xff, 0xff, 0x07)
+}
+
+func demonstrateUint() {
+	v := uint64(104543565)
+	encodedSize := EncodedSizeUint64(v)
+	bytes := make([]byte, encodedSize, encodedSize)
+	EncodeUint64(v, bytes)
+	fmt.Printf("%v encodes to %v\n", v, bytes)
+	vUint, _, _, err := Decode(bytes)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+	} else {
+		fmt.Printf("%v decodes to %v\n", bytes, vUint)
+	}
+}
+
+func demonstrateBigInt() {
+	v := big.NewInt(100000000000000)
+	v.Mul(v, v)
+	encodedSize := EncodedSize(v)
+	bytes := make([]byte, encodedSize, encodedSize)
+	Encode(v, bytes)
+	fmt.Printf("%v encodes to %v\n", v, bytes)
+	_, vBig, _, err := Decode(bytes)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+	} else {
+		fmt.Printf("%v decodes to %v\n", bytes, vBig)
+	}
+}
+
+func TestDemonstrate(t *testing.T) {
+	demonstrateUint()
+	demonstrateBigInt()
 }
