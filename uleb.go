@@ -3,7 +3,6 @@
 package uleb128
 
 import (
-	"fmt"
 	"math/big"
 )
 
@@ -39,8 +38,10 @@ func EncodedSizeUint64(value uint64) int {
 
 // Encode a math.big.Int value, returning the number of bytes encoded. The sign
 // of the value will be ignored.
-// Note: This will panic if the buffer isn't big enough.
-func Encode(value *big.Int, buffer []byte) (byteCount int) {
+// ok will be false if there wasn't enough room.
+func Encode(value *big.Int, buffer []byte) (byteCount int, ok bool) {
+	// Manually dispatch based on architecture because +build can't select on
+	// word size. This is awkward, but should in theory be optimized away.
 	if is32Bit() {
 		return encode32(value, buffer)
 	}
@@ -48,31 +49,50 @@ func Encode(value *big.Int, buffer []byte) (byteCount int) {
 }
 
 // Encode a uint64 value, returning the number of bytes encoded.
-// Note: This will panic if the buffer isn't big enough.
-func EncodeUint64(value uint64, buffer []byte) (byteCount int) {
+// ok will be false if there wasn't enough room.
+func EncodeUint64(value uint64, buffer []byte) (byteCount int, ok bool) {
 	if value == 0 {
+		if len(buffer) == 0 {
+			return
+		}
 		buffer[0] = 0
 		byteCount = 1
+		ok = true
 		return
 	}
 
 	index := 0
 	for value != 0 {
+		if index >= len(buffer) {
+			return
+		}
 		buffer[index] = byte((value & payloadMask) | continuationMask)
 		value >>= 7
 		index++
 	}
 	buffer[index-1] &= payloadMask
 	byteCount = index
+	ok = true
 	return
 }
 
 // Decode an encoded ULEB128 value. If the value is small enough to fit into
 // a uint64, asBigInt will be nil and asUint will contain the result.
-func Decode(buffer []byte) (asUint uint64, asBigInt *big.Int, byteCount int, err error) {
+// preValue and preBitCount allow multipart operations, where a previous
+// operation provides preBitCount bits of the first decoded word. Set to 0 to
+// disable this.
+// ok will be false if the value wasn't terminated.
+func Decode(preValue uint64, preBitCount int, buffer []byte) (asUint uint64, asBigInt *big.Int, byteCount int, ok bool) {
 	words := []big.Word{}
-	word := big.Word(0)
-	bitIndex := uint(0)
+
+	if is32Bit() && preBitCount >= 32 {
+		words = append(words, big.Word(preValue))
+		preValue >>= 32
+		preBitCount -= 32
+	}
+
+	word := big.Word(preValue)
+	bitIndex := uint(preBitCount)
 	for index := 0; index < len(buffer); index++ {
 		b := buffer[index]
 		word |= big.Word(b&payloadMask) << bitIndex
@@ -92,6 +112,7 @@ func Decode(buffer []byte) (asUint uint64, asBigInt *big.Int, byteCount int, err
 			if is32Bit() {
 				if len(words) == 1 {
 					asUint = uint64(words[0])
+					ok = true
 					return
 				} else if len(words) == 2 {
 					asUint = (uint64(words[1]) << 32) | uint64(words[0])
@@ -99,21 +120,21 @@ func Decode(buffer []byte) (asUint uint64, asBigInt *big.Int, byteCount int, err
 			} else {
 				if len(words) == 1 {
 					asUint = uint64(words[0])
+					ok = true
 					return
 				}
 			}
 			asBigInt = big.NewInt(0)
 			asBigInt.SetBits(words)
+			ok = true
 			return
 		}
 	}
 
-	err = fmt.Errorf("Unterminated uleb128 value")
-
 	return
 }
 
-func encode32(value *big.Int, buffer []byte) (byteCount int) {
+func encode32(value *big.Int, buffer []byte) (byteCount int, ok bool) {
 	// Prevent compilation on 64-bit arch
 	if !is32Bit() {
 		return
@@ -121,7 +142,9 @@ func encode32(value *big.Int, buffer []byte) (byteCount int) {
 
 	if isZero(value) {
 		buffer[0] = 0
-		return 1
+		byteCount = 1
+		ok = true
+		return
 	}
 
 	const lowMask = 0xffff
@@ -141,6 +164,9 @@ func encode32(value *big.Int, buffer []byte) (byteCount int) {
 		accum |= (srcWord & lowMask) << shift
 		groupCount := int(groupCounts32[shiftIndex])
 		for j := 0; j < groupCount; j++ {
+			if bufferPos >= len(buffer) {
+				return
+			}
 			buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 			accum >>= 7
 			bufferPos++
@@ -153,6 +179,9 @@ func encode32(value *big.Int, buffer []byte) (byteCount int) {
 		accum |= (srcWord & highMask) >> shift
 		groupCount = int(groupCounts32[shiftIndex])
 		for j := 0; j < groupCount; j++ {
+			if bufferPos >= len(buffer) {
+				return
+			}
 			buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 			accum >>= 7
 			bufferPos++
@@ -169,11 +198,16 @@ func encode32(value *big.Int, buffer []byte) (byteCount int) {
 	accum |= (srcWord & lowMask) << shift
 	groupCount := int(groupCounts32[shiftIndex])
 	for j := 0; j < groupCount; j++ {
+		if bufferPos >= len(buffer) {
+			return
+		}
 		buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 		accum >>= 7
 		if accum == 0 && srcWordHigh == 0 {
 			buffer[bufferPos] &= payloadMask
-			return bufferPos + 1
+			byteCount = bufferPos + 1
+			ok = true
+			return
 		}
 		bufferPos++
 	}
@@ -185,26 +219,38 @@ func encode32(value *big.Int, buffer []byte) (byteCount int) {
 	accum |= (srcWord & highMask) >> shift
 	groupCount = int(groupCounts32[shiftIndex])
 	for {
+		if bufferPos >= len(buffer) {
+			return
+		}
 		buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 		accum >>= 7
 		if accum == 0 {
 			buffer[bufferPos] &= payloadMask
-			return bufferPos + 1
+			byteCount = bufferPos + 1
+			ok = true
+			return
 		}
 		bufferPos++
 	}
-	return bufferPos
+	byteCount = bufferPos
+	ok = true
+	return
 }
 
-func encode64(value *big.Int, buffer []byte) (byteCount int) {
+func encode64(value *big.Int, buffer []byte) (byteCount int, ok bool) {
 	// Prevent compilation on 32-bit arch
 	if is32Bit() {
 		return
 	}
 
 	if isZero(value) {
+		if len(buffer) == 0 {
+			return
+		}
 		buffer[0] = 0
-		return 1
+		byteCount = 1
+		ok = true
+		return
 	}
 
 	const lowMask = 0xffffffff
@@ -224,6 +270,9 @@ func encode64(value *big.Int, buffer []byte) (byteCount int) {
 		accum |= (srcWord & lowMask) << shift
 		groupCount := int(groupCounts64[shiftIndex])
 		for j := 0; j < groupCount; j++ {
+			if bufferPos >= len(buffer) {
+				return
+			}
 			buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 			accum >>= 7
 			bufferPos++
@@ -236,6 +285,9 @@ func encode64(value *big.Int, buffer []byte) (byteCount int) {
 		accum |= (srcWord & highMask) >> shift
 		groupCount = int(groupCounts64[shiftIndex])
 		for j := 0; j < groupCount; j++ {
+			if bufferPos >= len(buffer) {
+				return
+			}
 			buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 			accum >>= 7
 			bufferPos++
@@ -252,11 +304,16 @@ func encode64(value *big.Int, buffer []byte) (byteCount int) {
 	accum |= (srcWord & lowMask) << shift
 	groupCount := int(groupCounts64[shiftIndex])
 	for j := 0; j < groupCount; j++ {
+		if bufferPos >= len(buffer) {
+			return
+		}
 		buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 		accum >>= 7
 		if accum == 0 && srcWordHigh == 0 {
 			buffer[bufferPos] &= payloadMask
-			return bufferPos + 1
+			byteCount = bufferPos + 1
+			ok = true
+			return
 		}
 		bufferPos++
 	}
@@ -268,15 +325,22 @@ func encode64(value *big.Int, buffer []byte) (byteCount int) {
 	accum |= srcWordHigh >> shift
 	groupCount = int(groupCounts64[shiftIndex])
 	for {
+		if bufferPos >= len(buffer) {
+			return
+		}
 		buffer[bufferPos] = byte(accum&payloadMask) | continuationMask
 		accum >>= 7
 		if accum == 0 {
 			buffer[bufferPos] &= payloadMask
-			return bufferPos + 1
+			byteCount = bufferPos + 1
+			ok = true
+			return
 		}
 		bufferPos++
 	}
-	return bufferPos
+	byteCount = bufferPos
+	ok = true
+	return
 }
 
 func is32Bit() bool {
@@ -301,7 +365,8 @@ func isZero(v *big.Int) bool {
 const payloadMask = 0x7f
 const continuationMask = 0x80
 
-// 64-bit words, split into upper and lower 32-bit groups
+// 64-bit words, split into upper and lower 32-bit groups:
+//
 // | Step | U/L | shift | groups | remain |
 // | ---- | --- | ----- | ------ | ------ |
 // |    0 |  L  |    0  |    4   |    4   |
@@ -321,7 +386,8 @@ const continuationMask = 0x80
 var groupCounts64 = []uint8{4, 5, 4, 5, 4, 5, 5, 4, 5, 4, 5, 4, 5, 5}
 var rightShifts64 = []uint8{0, 28, 0, 27, 0, 26, 0, 32, 0, 31, 0, 30, 0, 29}
 
-// 32-bit words, split into upper and lower 16-bit groups
+// 32-bit words, split into upper and lower 16-bit groups:
+//
 // | Step | U/L | shift | groups | remain |
 // | ---- | --- | ----- | ------ | ------ |
 // |    0 |  L  |    0  |    2   |    2   |
