@@ -48,18 +48,18 @@ func assertEncodeDecode(t *testing.T, words []uint64, expectedBytes ...byte) {
 	}
 	actualUint, actualBigInt, actualByteCount, ok := Decode(0, 0, actualBytes)
 	if !ok {
-		t.Errorf("Decode 1: Unterminated uleb decoding %v", actualBytes)
+		t.Errorf("Decode 1 %v: Unterminated uleb decoding %v", describe.D(actualBytes), actualBytes)
 	}
 	if actualByteCount != expectedByteCount {
 		t.Errorf("Decode 1: Expected byte count of %v but got %v", expectedByteCount, actualByteCount)
 	}
-	if len(expectedBigInt.Bits()) == 1 {
-		if expectedBigInt.Uint64() != actualUint {
-			t.Errorf("Decode 1 (uint): Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
-		}
-	} else {
+	if actualBigInt != nil {
 		if expectedBigInt.Cmp(actualBigInt) != 0 {
 			t.Errorf("Decode 1 (big): Expected %x but got %x", expectedBigInt, actualBigInt)
+		}
+	} else {
+		if expectedBigInt.Uint64() != actualUint {
+			t.Errorf("Decode 1 (uint): Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
 		}
 	}
 
@@ -106,13 +106,13 @@ func assertDecode(t *testing.T, preValue uint64, preBitCount int, expectedWords 
 	if actualByteCount != expectedByteCount {
 		t.Errorf("Decode 1: Expected byte count of %v but got %v", expectedByteCount, actualByteCount)
 	}
-	if len(expectedBigInt.Bits()) == 1 {
-		if expectedBigInt.Uint64() != actualUint {
-			t.Errorf("Decode 1 (uint): Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
-		}
-	} else {
+	if actualBigInt != nil {
 		if expectedBigInt.Cmp(actualBigInt) != 0 {
 			t.Errorf("Decode 1 (big): Expected %x but got %x", expectedBigInt, actualBigInt)
+		}
+	} else {
+		if expectedBigInt.Uint64() != actualUint {
+			t.Errorf("Decode 1 (uint): Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
 		}
 	}
 
@@ -181,6 +181,24 @@ func TestEncodeDecode(t *testing.T) {
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 		0xff, 0xff, 0xff, 0x07)
+}
+
+func TestEmptyData(t *testing.T) {
+	expectedUint := uint64(0xffffffffffffffff)
+	actualUint, actualBigInt, actualByteCount, ok := Decode(expectedUint, 64, []byte{})
+	if ok {
+		t.Errorf("Should not be ok")
+		return
+	}
+	if actualBigInt != nil {
+		t.Errorf("Expected big int to be nil")
+	}
+	if actualByteCount != 0 {
+		t.Errorf("Expected byte count of 0 but got %v", actualByteCount)
+	}
+	if actualUint != expectedUint {
+		t.Errorf("Expected %v but got %v\n", expectedUint, actualUint)
+	}
 }
 
 func TestPreValues(t *testing.T) {

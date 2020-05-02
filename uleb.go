@@ -76,19 +76,48 @@ func EncodeUint64(value uint64, buffer []byte) (byteCount int, ok bool) {
 	return
 }
 
-// Decode an encoded ULEB128 value. If the value is small enough to fit into
-// a uint64, asBigInt will be nil and asUint will contain the result.
-// preValue and preBitCount allow multipart operations, where a previous
-// operation provides preBitCount bits of the first decoded word. Set to 0 to
-// disable this.
-// ok will be false if the value wasn't terminated.
+// Decode an encoded ULEB128 value. If the result is small enough to fit into
+// type uint64, asBigInt will be nil and asUint will contain the result.
+//
+// preValue and preBitCount set the initial low bits of the decoded value, upon
+// which decoded data is added, to support multipart operations (where a
+// previous operation provides part of the first decoded word). Set to 0 to
+// disable this. preValue will be masked according to preBitCount.
+//
+// ok will be false if the buffer wasn't terminated with a byte value < 0x80.
+// ok will also be false if buffer is empty (in which case asUint will contain
+// the masked preValue).
 func Decode(preValue uint64, preBitCount int, buffer []byte) (asUint uint64, asBigInt *big.Int, byteCount int, ok bool) {
+	if preBitCount > 64 {
+		preBitCount = 64
+	}
+	preValue &= maskForBitCount(preBitCount)
+
+	if len(buffer) == 0 {
+		asUint = preValue
+		return
+	}
+
+	if buffer[0] == 0 {
+		byteCount = 1
+		asUint = preValue
+		ok = true
+		return
+	}
+
+	if buffer[0] < 0x80 && preBitCount <= 57 {
+		asUint = (uint64(buffer[0]) << uint(preBitCount)) | preValue
+		byteCount = 1
+		ok = true
+		return
+	}
+
 	words := []big.Word{}
 
-	if is32Bit() && preBitCount >= 32 {
+	for preBitCount >= wordSize() {
 		words = append(words, big.Word(preValue))
-		preValue >>= 32
-		preBitCount -= 32
+		preValue >>= uint(wordSize())
+		preBitCount -= wordSize()
 	}
 
 	word := big.Word(preValue)
@@ -105,10 +134,15 @@ func Decode(preValue uint64, preBitCount int, buffer []byte) (asUint uint64, asB
 		}
 
 		if b&continuationMask != continuationMask {
+			byteCount = index + 1
+			if len(words) == 0 {
+				asUint = uint64(word)
+				ok = true
+				return
+			}
 			if word != 0 {
 				words = append(words, big.Word(word))
 			}
-			byteCount = index + 1
 			if is32Bit() {
 				if len(words) == 1 {
 					asUint = uint64(words[0])
@@ -116,6 +150,8 @@ func Decode(preValue uint64, preBitCount int, buffer []byte) (asUint uint64, asB
 					return
 				} else if len(words) == 2 {
 					asUint = (uint64(words[1]) << 32) | uint64(words[0])
+					ok = true
+					return
 				}
 			} else {
 				if len(words) == 1 {
@@ -134,6 +170,10 @@ func Decode(preValue uint64, preBitCount int, buffer []byte) (asUint uint64, asB
 	return
 }
 
+func maskForBitCount(bitCount int) uint64 {
+	return ^(^uint64(0) << uint(bitCount))
+}
+
 func encode32(value *big.Int, buffer []byte) (byteCount int, ok bool) {
 	// Prevent compilation on 64-bit arch
 	if !is32Bit() {
@@ -141,6 +181,9 @@ func encode32(value *big.Int, buffer []byte) (byteCount int, ok bool) {
 	}
 
 	if isZero(value) {
+		if len(buffer) == 0 {
+			return
+		}
 		buffer[0] = 0
 		byteCount = 1
 		ok = true
@@ -254,7 +297,8 @@ func encode64(value *big.Int, buffer []byte) (byteCount int, ok bool) {
 	}
 
 	const lowMask = 0xffffffff
-	const highMask = 0xffffffff << 32
+	highMask := big.Word(0xffffffff)
+	highMask <<= 32
 	words := value.Bits()
 	accum := big.Word(0)
 	bufferPos := 0
