@@ -275,7 +275,7 @@ func TestEmptyData(t *testing.T) {
 }
 
 func TestExtraData(t *testing.T) {
-	var do = func(value uint64, expectedByteCount int, bytes ...byte) {
+	var assertExtraData = func(value uint64, expectedByteCount int, bytes ...byte) {
 		actualUint, actualBigInt, actualByteCount, ok := Decode(0, 0, bytes)
 		if !ok {
 			t.Errorf("Decoding failed")
@@ -292,14 +292,17 @@ func TestExtraData(t *testing.T) {
 		}
 	}
 
-	do(0, 1, 0x00, 0xff)
-	do(1, 1, 0x01, 0xff)
-	do(0x7f, 1, 0x7f, 0x01)
-	do(0x80, 2, 0x80, 0x01, 0x01, 0x00)
+	assertExtraData(0, 1, 0x00, 0xff)
+	assertExtraData(1, 1, 0x01, 0xff)
+	assertExtraData(0x7f, 1, 0x7f, 0x01)
+	assertExtraData(0x80, 2, 0x80, 0x01, 0x01, 0x00)
 }
 
 func TestPreValues(t *testing.T) {
 	assertDecode(t, 1, 1, []uint64{0x03}, 0x01)
+	assertDecode(t, 0xff, 1, []uint64{0x03}, 0x01)
+	assertDecode(t, 0, 6, []uint64{0xc0}, 0x03)
+
 	for i := 0; i < 63; i++ {
 		word := uint64(1) << uint(i)
 		assertDecode(t, 0, i, []uint64{word}, 0x01)
