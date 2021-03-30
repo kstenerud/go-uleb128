@@ -21,6 +21,7 @@
 package uleb128
 
 import (
+	"bytes"
 	"fmt"
 	"math/big"
 	"reflect"
@@ -55,37 +56,41 @@ func assertEncodeDecode(t *testing.T, words []uint64, expectedBytes ...byte) {
 	expectedBigInt := big.NewInt(0)
 	expectedBigInt.SetBits(toBigWords(words))
 	expectedByteCount := EncodedSize(expectedBigInt)
-	actualBytes := make([]byte, expectedByteCount, expectedByteCount)
-	actualFilledByteCount, ok := Encode(expectedBigInt, actualBytes)
-	if !ok {
-		t.Errorf("Not enough room to encode %v into %v bytes", expectedBigInt, len(actualBytes))
+	actualBuffer := &bytes.Buffer{}
+	actualFilledByteCount, err := Encode(expectedBigInt, actualBuffer)
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualFilledByteCount != expectedByteCount {
-		t.Errorf("Encode 1: Expected byte count of %v but got %v", expectedByteCount, actualFilledByteCount)
+		t.Errorf("Expected %v to encode to a byte count of %v but got %v", describe.D(words), expectedByteCount, actualFilledByteCount)
 		return
 	}
-	if !reflect.DeepEqual(actualBytes, expectedBytes) {
-		t.Errorf("Encode 1: Expected %v but got %v", describe.D(expectedBytes), describe.D(actualBytes))
+	if actualFilledByteCount != actualBuffer.Len() {
+		t.Errorf("Encoding %v reported a byte count of %v but was actually %v", describe.D(words), actualFilledByteCount, actualBuffer.Len())
 		return
 	}
-	actualUint, actualBigInt, actualByteCount, ok := Decode(0, 0, actualBytes)
-	if !ok {
-		t.Errorf("Decode 1 %v: Unterminated uleb decoding %v", describe.D(actualBytes), actualBytes)
+	if !reflect.DeepEqual(actualBuffer.Bytes(), expectedBytes) {
+		t.Errorf("Expected %v to encode to %v but got %v", describe.D(words), describe.D(expectedBytes), describe.D(actualBuffer.Bytes()))
+		return
+	}
+	actualUint, actualBigInt, actualByteCount, err := Decode(bytes.NewBuffer(expectedBytes))
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualByteCount != expectedByteCount {
-		t.Errorf("Decode 1: Expected byte count of %v but got %v", expectedByteCount, actualByteCount)
+		t.Errorf("Decoding %v: Expected decoding %v to have a byte count of %v but got %v", describe.D(words), describe.D(expectedBytes), expectedByteCount, actualByteCount)
 		return
 	}
 	if actualBigInt != nil {
 		if expectedBigInt.Cmp(actualBigInt) != 0 {
-			t.Errorf("Decode 1 (big): Expected %x but got %x", expectedBigInt, actualBigInt)
+			t.Errorf("Expected %v to decode to big %x but got %x", describe.D(expectedBytes), expectedBigInt, actualBigInt)
 			return
 		}
 	} else {
 		if expectedBigInt.Uint64() != actualUint {
-			t.Errorf("Decode 1 (uint): Expected %x but got %x", expectedBigInt.Uint64(), actualUint)
+			t.Errorf("Expected %v to decode to %x but got %x", describe.D(expectedBytes), expectedBigInt.Uint64(), actualUint)
 			return
 		}
 	}
@@ -96,25 +101,25 @@ func assertEncodeDecode(t *testing.T, words []uint64, expectedBytes ...byte) {
 
 	expectedUint := words[0]
 	expectedByteCount = EncodedSizeUint64(expectedUint)
-	actualBytes = make([]byte, expectedByteCount, expectedByteCount)
+	actualBuffer.Reset()
 
-	actualFilledByteCount, ok = EncodeUint64(expectedUint, actualBytes)
-	if !ok {
-		t.Errorf("Encode 2: Not enough room to encode %v into %v bytes", expectedUint, len(actualBytes))
+	actualByteCount, err = EncodeUint64(expectedUint, actualBuffer)
+	if err != nil {
+		t.Error(err)
 		return
 	}
-	if actualFilledByteCount != expectedByteCount {
-		t.Errorf("Encode 2: Expected byte count of %v but got %v", expectedByteCount, actualFilledByteCount)
+	if actualBuffer.Len() != expectedByteCount {
+		t.Errorf("Encode 2: Expected byte count of %v but got %v", expectedByteCount, actualBuffer.Len())
 		return
 	}
 
-	if !reflect.DeepEqual(actualBytes, expectedBytes) {
-		t.Errorf("Encode 2: Expected %v but got %v", describe.D(expectedBytes), describe.D(actualBytes))
+	if !reflect.DeepEqual(actualBuffer.Bytes(), expectedBytes) {
+		t.Errorf("Encode 2: Expected %v but got %v", describe.D(expectedBytes), describe.D(actualBuffer.Bytes()))
 		return
 	}
-	actualUint, actualBigInt, actualByteCount, ok = Decode(0, 0, actualBytes)
-	if !ok {
-		t.Errorf("Decode 2: Unterminated uleb decoding %v", actualBytes)
+	actualUint, actualBigInt, actualByteCount, err = Decode(actualBuffer)
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualByteCount != expectedByteCount {
@@ -129,47 +134,49 @@ func assertEncodeDecode(t *testing.T, words []uint64, expectedBytes ...byte) {
 
 func assertEncodeDecodeUint(t *testing.T, value uint64, expectedBytes ...byte) {
 	expectedByteCount := EncodedSizeUint64(value)
-	actualBytes := make([]byte, expectedByteCount, expectedByteCount)
-	actualFilledByteCount, ok := EncodeUint64(value, actualBytes)
-	if !ok {
-		t.Errorf("Not enough room to encode %v into %v bytes", value, len(actualBytes))
+	actualBuffer := &bytes.Buffer{}
+	actualFilledByteCount, err := EncodeUint64(value, actualBuffer)
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualFilledByteCount != expectedByteCount {
-		t.Errorf("Encode 1: Expected byte count of %v but got %v", expectedByteCount, actualFilledByteCount)
+		t.Errorf("Expected %v to encode to a byte count of %v but got %v", value, expectedByteCount, actualFilledByteCount)
 		return
 	}
-	if !reflect.DeepEqual(actualBytes, expectedBytes) {
-		t.Errorf("Encode 1: Expected %v but got %v", describe.D(expectedBytes), describe.D(actualBytes))
+	if !reflect.DeepEqual(actualBuffer.Bytes(), expectedBytes) {
+		t.Errorf("Expected %v to encode to %v but got %v", value, describe.D(expectedBytes), describe.D(actualBuffer.Bytes()))
 		return
 	}
-	actualUint, actualBigInt, actualByteCount, ok := Decode(0, 0, actualBytes)
-	if !ok {
-		t.Errorf("Decode 1 %v: Unterminated uleb decoding %v", describe.D(actualBytes), actualBytes)
+
+	actualUint, actualBigInt, actualByteCount, err := Decode(bytes.NewBuffer(expectedBytes))
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualByteCount != expectedByteCount {
-		t.Errorf("Decode 1: Expected byte count of %v but got %v", expectedByteCount, actualByteCount)
+		t.Errorf("Decoding %v: Expected decoding %v to have a byte count of %v but got %v", value, describe.D(expectedBytes), expectedByteCount, actualByteCount)
 		return
 	}
 	if actualBigInt != nil {
-		t.Errorf("%v (from %v) should not decode to a big int", describe.D(actualBytes), value)
+		t.Errorf("%v (from %v) should not decode to a big int", describe.D(expectedBytes), value)
 		return
 	}
 	if value != actualUint {
-		t.Errorf("Decode 1 (uint): Expected %x but got %x", value, actualUint)
+		t.Errorf("Expected %v to decode to 0x%x but got 0x%x", describe.D(expectedBytes), value, actualUint)
 		return
 	}
 }
 
-func assertDecode(t *testing.T, preValue uint64, preBitCount int, expectedWords []uint64, bytes ...byte) {
+func assertDecode(t *testing.T, expectedWords []uint64, b ...byte) {
 	expectedBigInt := big.NewInt(0)
 	expectedBigInt.SetBits(toBigWords(expectedWords))
-	expectedByteCount := len(bytes)
+	expectedByteCount := len(b)
+	buff := bytes.NewBuffer(b)
 
-	actualUint, actualBigInt, actualByteCount, ok := Decode(preValue, preBitCount, bytes)
-	if !ok {
-		t.Errorf("Decode 1: Unterminated uleb decoding %v", bytes)
+	actualUint, actualBigInt, actualByteCount, err := Decode(buff)
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualByteCount != expectedByteCount {
@@ -194,9 +201,9 @@ func assertDecode(t *testing.T, preValue uint64, preBitCount int, expectedWords 
 
 	expectedUint := expectedWords[0]
 
-	actualUint, actualBigInt, actualByteCount, ok = Decode(preValue, preBitCount, bytes)
-	if !ok {
-		t.Errorf("Decode 2: Unterminated uleb decoding %v", bytes)
+	actualUint, actualBigInt, actualByteCount, err = Decode(buff)
+	if err != nil {
+		t.Error(err)
 		return
 	}
 	if actualByteCount != expectedByteCount {
@@ -212,18 +219,19 @@ func assertDecode(t *testing.T, preValue uint64, preBitCount int, expectedWords 
 func assertEncodeFails(t *testing.T, words []uint64, byteCount int) {
 	expectedBigInt := big.NewInt(0)
 	expectedBigInt.SetBits(toBigWords(words))
-	actualBytes := make([]byte, byteCount, byteCount)
-	_, ok := Encode(expectedBigInt, actualBytes)
-	if ok {
-		t.Errorf("Expected encoding %v into %v bytes to fail. Result = %v", words, byteCount, actualBytes)
+	actualBuffer := &bytes.Buffer{}
+	_, err := Encode(expectedBigInt, actualBuffer)
+	if err == nil {
+		t.Errorf("Expected encoding %v into %v bytes to fail. Result = %v", words, byteCount, actualBuffer.Bytes())
 		return
 	}
 }
 
-func assertDecodeFails(t *testing.T, bytes ...byte) {
-	actualUint, actualBigInt, actualByteCount, ok := Decode(0, 0, bytes)
-	if ok {
-		t.Errorf("Expected decoding %v to fail. Result = %v, %v, %v", bytes, actualUint, actualBigInt, actualByteCount)
+func assertDecodeFails(t *testing.T, b ...byte) {
+	buff := bytes.NewBuffer(b)
+	actualUint, actualBigInt, actualByteCount, err := Decode(buff)
+	if err != nil {
+		t.Errorf("Expected decoding %v to fail. Result = %v, %v, %v", b, actualUint, actualBigInt, actualByteCount)
 		return
 	}
 }
@@ -276,29 +284,12 @@ func TestEncodeDecode(t *testing.T) {
 		0xff, 0xff, 0xff, 0x07)
 }
 
-func TestEmptyData(t *testing.T) {
-	expectedUint := uint64(0xffffffffffffffff)
-	actualUint, actualBigInt, actualByteCount, ok := Decode(expectedUint, 64, []byte{})
-	if ok {
-		t.Errorf("Should not be ok")
-		return
-	}
-	if actualBigInt != nil {
-		t.Errorf("Expected big int to be nil")
-	}
-	if actualByteCount != 0 {
-		t.Errorf("Expected byte count of 0 but got %v", actualByteCount)
-	}
-	if actualUint != expectedUint {
-		t.Errorf("Expected %v but got %v\n", expectedUint, actualUint)
-	}
-}
-
 func TestExtraData(t *testing.T) {
-	var assertExtraData = func(value uint64, expectedByteCount int, bytes ...byte) {
-		actualUint, actualBigInt, actualByteCount, ok := Decode(0, 0, bytes)
-		if !ok {
-			t.Errorf("Decoding failed")
+	var assertExtraData = func(value uint64, expectedByteCount int, b ...byte) {
+		buff := bytes.NewBuffer(b)
+		actualUint, actualBigInt, actualByteCount, err := Decode(buff)
+		if err != nil {
+			t.Error(err)
 			return
 		}
 		if actualBigInt != nil {
@@ -318,131 +309,63 @@ func TestExtraData(t *testing.T) {
 	assertExtraData(0x80, 2, 0x80, 0x01, 0x01, 0x00)
 }
 
-func TestPreValues(t *testing.T) {
-	assertDecode(t, 1, 1, []uint64{0x03}, 0x01)
-	assertDecode(t, 0xff, 1, []uint64{0x03}, 0x01)
-	assertDecode(t, 0, 6, []uint64{0xc0}, 0x03)
+// func TestBadData(t *testing.T) {
+// 	for i := 0; i < 0x80; i++ {
+// 		assertEncodeFails(t, []uint64{uint64(i)}, 0)
+// 	}
 
-	for i := 0; i < 63; i++ {
-		word := uint64(1) << uint(i)
-		assertDecode(t, 0, i, []uint64{word}, 0x01)
-	}
+// 	for i := 0; i < 57; i++ {
+// 		word := uint64(0x80) << uint(i)
+// 		assertEncodeFails(t, []uint64{word}, 1)
+// 	}
 
-	for i := 0; i < 57; i++ {
-		word := uint64(0x80) << uint(i)
-		assertDecode(t, 0, i, []uint64{word}, 0x80, 0x01)
-	}
+// 	for i := 0x80; i < 0x100; i++ {
+// 		assertDecodeFails(t, byte(i))
+// 	}
 
-	assertDecode(t, 0, 0, []uint64{0xffffffffffffffff, 1},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 1, []uint64{0xfffffffffffffffe, 3},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 1, 1, []uint64{0xffffffffffffffff, 3},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 2, []uint64{0xfffffffffffffffc, 7},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 1, 2, []uint64{0xfffffffffffffffd, 7},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 2, 2, []uint64{0xfffffffffffffffe, 7},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 3, 2, []uint64{0xffffffffffffffff, 7},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 3, []uint64{0xfffffffffffffff8, 0x0f},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 4, []uint64{0xfffffffffffffff0, 0x1f},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 5, []uint64{0xffffffffffffffe0, 0x3f},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 6, []uint64{0xffffffffffffffc0, 0x7f},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 7, []uint64{0xffffffffffffff80, 0xff},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-
-	assertDecode(t, 0, 8, []uint64{0xffffffffffffff00, 0x1ff},
-		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x03)
-}
-
-func TestBadData(t *testing.T) {
-	for i := 0; i < 0x80; i++ {
-		assertEncodeFails(t, []uint64{uint64(i)}, 0)
-	}
-
-	for i := 0; i < 57; i++ {
-		word := uint64(0x80) << uint(i)
-		assertEncodeFails(t, []uint64{word}, 1)
-	}
-
-	for i := 0x80; i < 0x100; i++ {
-		assertDecodeFails(t, byte(i))
-	}
-
-	for i := 0x80; i < 0x100; i++ {
-		for j := 0x80; j < 0x100; j++ {
-			assertDecodeFails(t, byte(i), byte(j))
-		}
-	}
-}
+// 	for i := 0x80; i < 0x100; i++ {
+// 		for j := 0x80; j < 0x100; j++ {
+// 			assertDecodeFails(t, byte(i), byte(j))
+// 		}
+// 	}
+// }
 
 func demonstrateUint() {
 	v := uint64(104543565)
-	encodedSize := EncodedSizeUint64(v)
-	bytes := make([]byte, encodedSize, encodedSize)
-	_, ok := EncodeUint64(v, bytes)
-	if !ok {
-		fmt.Printf("Error: Not enough room to encode %v\n", v)
+	buff := &bytes.Buffer{}
+	_, err := EncodeUint64(v, buff)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
 	}
-	fmt.Printf("%v encodes to %v\n", v, bytes)
-	vUint, _, _, ok := Decode(0, 0, bytes)
-	if !ok {
-		fmt.Printf("Error: Unterminated ULEB128: %v\n", bytes)
+	encoded := buff.Bytes()
+	fmt.Printf("%v encodes to %v\n", v, encoded)
+	vUint, _, _, err := Decode(buff)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
 	} else {
-		fmt.Printf("%v decodes to %v\n", bytes, vUint)
+		fmt.Printf("%v decodes to %v\n", encoded, vUint)
 	}
 }
 
 func demonstrateBigInt() {
 	v := big.NewInt(100000000000000)
 	v.Mul(v, v)
-	encodedSize := EncodedSize(v)
-	bytes := make([]byte, encodedSize, encodedSize)
-	_, ok := Encode(v, bytes)
-	if !ok {
-		fmt.Printf("Error: Not enough room to encode %v\n", v)
+	buff := &bytes.Buffer{}
+	_, err := Encode(v, buff)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
 	}
-	fmt.Printf("%v encodes to %v\n", v, bytes)
-	_, vBig, _, ok := Decode(0, 0, bytes)
-	if !ok {
-		fmt.Printf("Error: Unterminated ULEB128: %v\n", bytes)
+	encoded := buff.Bytes()
+	fmt.Printf("%v encodes to %v\n", v, encoded)
+	_, vBig, _, err := Decode(buff)
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
 	} else {
-		fmt.Printf("%v decodes to %v\n", bytes, vBig)
-	}
-}
-
-func demonstratePreValue() {
-	bytes := []byte{0xd1, 0xf9, 0xd6, 3}
-	preValue := uint64(0x05)
-	preBitCount := 4
-	vUint, _, _, ok := Decode(preValue, preBitCount, bytes)
-	if !ok {
-		fmt.Printf("Error: Unterminated ULEB128: %v\n", bytes)
-	} else {
-		fmt.Printf("%v with %v-bit pre-value (%v) decodes to %v\n", bytes, preBitCount, preValue, vUint)
+		fmt.Printf("%v decodes to %v\n", encoded, vBig)
 	}
 }
 
 func TestDemonstrate(t *testing.T) {
 	demonstrateUint()
 	demonstrateBigInt()
-	demonstratePreValue()
 }
